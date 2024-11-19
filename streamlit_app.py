@@ -1,5 +1,5 @@
 import streamlit as st
-import speedtest
+import streamlit.components.v1 as components
 import json
 import os
 import pandas as pd
@@ -7,22 +7,19 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
 import time
-from ping3 import ping
 import requests
 import numpy as np
 from plotly.subplots import make_subplots
-import threading
 import socket
-import platform
 
 # Page config
 st.set_page_config(
-    page_title="SpeedScope - Advanced Internet Speed Analyzer",
+    page_title="SpeedScope - Browser-based Internet Speed Analyzer",
     page_icon="🛜",
     layout="wide",
 )
 
-# Custom CSS
+# Custom CSS (same as before)
 st.markdown("""
     <style>
         .title-text {
@@ -78,40 +75,11 @@ st.markdown("""
 
 # Title and subtitle
 st.markdown('<p class="title-text">SpeedScope</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle-text">Advanced Internet Speed Analyzer</p>', unsafe_allow_html=True)
-
+st.markdown('<p class="subtitle-text">Browser-based Internet Speed Analyzer</p>', unsafe_allow_html=True)
 class NetworkAnalyzer:
     def __init__(self):
         self.history_file = "speed_test_history.json"
-        self.current_isp = socket.gethostbyname(socket.gethostname())
-    
-    def measure_jitter(self, host="8.8.8.8", samples=10):
-        """Measure network jitter using ping"""
-        ping_times = []
-        lost_packets = 0
         
-        for _ in range(samples):
-            try:
-                response_time = ping(host)
-                if response_time is not None:
-                    ping_times.append(response_time * 1000)  # Convert to ms
-                else:
-                    lost_packets += 1
-            except Exception:
-                lost_packets += 1
-            time.sleep(0.1)
-        
-        if ping_times:
-            mean_ping = np.mean(ping_times)
-            jitter = np.mean([abs(ping - mean_ping) for ping in ping_times])
-            packet_loss_percent = (lost_packets / samples) * 100
-            return {
-                'jitter': round(jitter, 2),
-                'packet_loss': round(packet_loss_percent, 2),
-                'mean_ping': round(mean_ping, 2)
-            }
-        return None
-
     def analyze_isp_performance(self):
         """Analyze ISP performance metrics"""
         try:
@@ -203,14 +171,99 @@ class NetworkAnalyzer:
         
         return recommendations
 
-# Initialize session state
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'is_testing' not in st.session_state:
-    st.session_state.is_testing = False
-if 'current_test_data' not in st.session_state:
-    st.session_state.current_test_data = None
+# JavaScript code for client-side speed testing
+SPEED_TEST_JS = """
+<script>
+async function measureConnectionSpeed() {
+    const imageUrl = 'https://upload.wikimedia.org/wikipedia/commons/2/2d/Snake_River_%285mb%29.jpg';
+    const downloadSize = 5.1; // Size in MB
+    
+    try {
+        const startTime = performance.now();
+        const response = await fetch(imageUrl);
+        const endTime = performance.now();
+        
+        const duration = (endTime - startTime) / 1000; // Convert to seconds
+        const bitsLoaded = downloadSize * 8; // Convert to bits
+        const speedMbps = (bitsLoaded / duration).toFixed(2);
+        
+        return {
+            download: parseFloat(speedMbps),
+            upload: await measureUploadSpeed(),
+            ping: await measurePing(),
+            jitter: await measureJitter(),
+            packet_loss: await estimatePacketLoss()
+        };
+    } catch (error) {
+        console.error('Error measuring speed:', error);
+        return null;
+    }
+}
 
+async function measureUploadSpeed() {
+    const dataSize = 2 * 1024 * 1024; // 2MB
+    const data = new Blob([new ArrayBuffer(dataSize)]);
+    
+    const startTime = performance.now();
+    try {
+        await fetch('https://httpbin.org/post', {
+            method: 'POST',
+            body: data
+        });
+        const endTime = performance.now();
+        const duration = (endTime - startTime) / 1000;
+        const speedMbps = ((dataSize * 8) / (1024 * 1024) / duration).toFixed(2);
+        return parseFloat(speedMbps);
+    } catch (error) {
+        console.error('Error measuring upload speed:', error);
+        return 0;
+    }
+}
+
+async function measurePing() {
+    const startTime = performance.now();
+    try {
+        await fetch('https://httpbin.org/get');
+        const endTime = performance.now();
+        return parseFloat((endTime - startTime).toFixed(2));
+    } catch (error) {
+        console.error('Error measuring ping:', error);
+        return 0;
+    }
+}
+
+async function measureJitter() {
+    const pings = [];
+    for (let i = 0; i < 5; i++) {
+        pings.push(await measurePing());
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    const differences = [];
+    for (let i = 1; i < pings.length; i++) {
+        differences.push(Math.abs(pings[i] - pings[i-1]));
+    }
+    
+    return parseFloat((differences.reduce((a, b) => a + b, 0) / differences.length).toFixed(2));
+}
+
+async function estimatePacketLoss() {
+    let lost = 0;
+    const attempts = 10;
+    
+    for (let i = 0; i < attempts; i++) {
+        try {
+            await fetch('https://httpbin.org/get');
+        } catch {
+            lost++;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    return parseFloat(((lost / attempts) * 100).toFixed(2));
+}
+</script>
+"""
 def load_history():
     """Load test history from file"""
     if os.path.exists('speed_test_history.json'):
@@ -222,48 +275,6 @@ def save_history(history):
     """Save test history to file"""
     with open('speed_test_history.json', 'w') as f:
         json.dump(history, f, indent=4)
-
-def run_speed_test():
-    """Run speed test and return results"""
-    try:
-        st.session_state.is_testing = True
-        speed_test = speedtest.Speedtest()
-        
-        with st.spinner('Finding best server...'):
-            speed_test.get_best_server()
-        
-        with st.spinner('Testing download speed...'):
-            download_speed = speed_test.download() / 1_000_000
-        
-        with st.spinner('Testing upload speed...'):
-            upload_speed = speed_test.upload() / 1_000_000
-        
-        ping = speed_test.results.ping
-        
-        # Get jitter and packet loss
-        network_analyzer = NetworkAnalyzer()
-        jitter_data = network_analyzer.measure_jitter()
-        
-        result = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "download": round(download_speed, 2),
-            "upload": round(upload_speed, 2),
-            "ping": round(ping, 2),
-            "jitter": jitter_data['jitter'] if jitter_data else 0,
-            "packet_loss": jitter_data['packet_loss'] if jitter_data else 0
-        }
-        
-        st.session_state.current_test_data = result
-        st.session_state.history.append(result)
-        save_history(st.session_state.history)
-        
-        return result
-        
-    except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
-        return None
-    finally:
-        st.session_state.is_testing = False
 
 def create_speed_chart(history):
     """Create speed history chart"""
@@ -309,8 +320,38 @@ def create_speed_chart(history):
     
     return fig
 
+# Initialize session state
+if 'history' not in st.session_state:
+    st.session_state.history = []
+if 'is_testing' not in st.session_state:
+    st.session_state.is_testing = False
+if 'current_test_data' not in st.session_state:
+    st.session_state.current_test_data = None
+
 # Load existing history
 st.session_state.history = load_history()
+
+# Create the speed test HTML component
+speed_test_component = f"""
+<div>
+    {SPEED_TEST_JS}
+    <script>
+        async function runSpeedTest() {{
+            const result = await measureConnectionSpeed();
+            if (result) {{
+                result.timestamp = new Date().toISOString();
+                window.parent.postMessage({{
+                    type: 'speed_test_complete',
+                    data: result
+                }}, '*');
+            }}
+        }}
+    </script>
+</div>
+"""
+
+# Add the component to the page
+components.html(speed_test_component, height=0)
 
 # Create three columns for speed metrics
 col1, col2, col3 = st.columns(3)
@@ -330,29 +371,56 @@ with col3:
     st.markdown('<p class="speed-text">Ping</p>', unsafe_allow_html=True)
     ping_placeholder = st.empty()
 
-# Center the start button
-# Add this instead:
+# Start button
 start_button = st.button(
     "Start Test",
     disabled=st.session_state.is_testing,
     use_container_width=False,
     key="start_test_button"
 )
+# Add JavaScript event listener for speed test results
+components.html("""
+    <script>
+        window.addEventListener('message', function(event) {
+            if (event.data.type === 'speed_test_complete') {
+                const testData = event.data.data;
+                window.parent.postMessage({
+                    type: 'streamlit:set_session_state',
+                    data: {
+                        current_test_data: testData,
+                        is_testing: false
+                    }
+                }, '*');
+            }
+        });
+    </script>
+""", height=0)
 
+# Handle speed test results
 if start_button:
-    result = run_speed_test()
-    if result:
-        # Update metrics
-        download_speed = result['download']
-        upload_speed = result['upload']
-        ping = result['ping']
-        
-        download_placeholder.markdown(f'<p class="speed-text">{download_speed:.2f} Mbps</p>', unsafe_allow_html=True)
-        upload_placeholder.markdown(f'<p class="speed-text">{upload_speed:.2f} Mbps</p>', unsafe_allow_html=True)
-        ping_placeholder.markdown(f'<p class="speed-text">{ping:.2f} ms</p>', unsafe_allow_html=True)
-        
-        download_progress.progress(min(download_speed / 100, 1.0))
-        upload_progress.progress(min(upload_speed / 100, 1.0))
+    st.session_state.is_testing = True
+    components.html("""
+        <script>
+            runSpeedTest();
+        </script>
+    """, height=0)
+
+if st.session_state.current_test_data:
+    # Update metrics
+    download_speed = st.session_state.current_test_data['download']
+    upload_speed = st.session_state.current_test_data['upload']
+    ping = st.session_state.current_test_data['ping']
+    
+    download_placeholder.markdown(f'<p class="speed-text">{download_speed:.2f} Mbps</p>', unsafe_allow_html=True)
+    upload_placeholder.markdown(f'<p class="speed-text">{upload_speed:.2f} Mbps</p>', unsafe_allow_html=True)
+    ping_placeholder.markdown(f'<p class="speed-text">{ping:.2f} ms</p>', unsafe_allow_html=True)
+    
+    download_progress.progress(min(download_speed / 100, 1.0))
+    upload_progress.progress(min(upload_speed / 100, 1.0))
+    
+    # Save to history
+    st.session_state.history.append(st.session_state.current_test_data)
+    save_history(st.session_state.history)
 
 # Display speed history chart
 if st.session_state.history:
@@ -366,7 +434,6 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📈 Performance Trends",
     "🌐 ISP Analysis"
 ])
-
 network_analyzer = NetworkAnalyzer()
 
 with tab1:
@@ -428,6 +495,7 @@ with tab2:
         # Create detailed metrics visualization
         if len(st.session_state.history) > 1:
             df = pd.DataFrame(st.session_state.history)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
             fig = make_subplots(rows=2, cols=2)
             
             # Download speed distribution
@@ -444,14 +512,14 @@ with tab2:
             
             # Ping over time
             fig.add_trace(
-                go.Scatter(x=pd.to_datetime(df['timestamp']), y=df['ping'], 
+                go.Scatter(x=df['timestamp'], y=df['ping'], 
                           name="Ping", mode='lines+markers'),
                 row=2, col=1
             )
             
             # Jitter over time
             fig.add_trace(
-                go.Scatter(x=pd.to_datetime(df['timestamp']), y=df['jitter'],
+                go.Scatter(x=df['timestamp'], y=df['jitter'],
                           name="Jitter", mode='lines+markers'),
                 row=2, col=2
             )
@@ -519,7 +587,7 @@ with tab4:
                 st.metric("Average Upload", f"{isp_metrics['avg_upload']} Mbps")
                 st.metric("Network Consistency", f"{isp_metrics['consistency']}%")
 
-# Credits with GitHub link
+# Credits
 st.markdown(
     '<p class="credit-text">Made with ❤️ by <a href="https://github.com/tanishpoddar" target="_blank" style="color: #ff6b6b; text-decoration: none; border-bottom: 1px dashed #ff6b6b;">Tanish Poddar</a></p>',
     unsafe_allow_html=True)
