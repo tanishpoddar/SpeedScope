@@ -12,6 +12,16 @@ import numpy as np
 from plotly.subplots import make_subplots
 import socket
 
+# Initialize empty JSON file if it doesn't exist or is invalid
+def initialize_history_file():
+    try:
+        with open('speed_test_history.json', 'r') as f:
+            json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        with open('speed_test_history.json', 'w') as f:
+            json.dump([], f)
+
+initialize_history_file()
 # Page config
 st.set_page_config(
     page_title="SpeedScope - Browser-based Internet Speed Analyzer",
